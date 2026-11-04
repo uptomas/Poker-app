@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Odds Lab — Calculadora de Poker</title>
+  <meta name="description" content="Calcula as tuas probabilidades de ganhar no Texas Hold'em, os teus outs e pot odds, com explicação passo a passo." />
+  <meta name="theme-color" content="#0b1512" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header class="top">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">♠</span>
+      <div>
+        <h1>Odds Lab</h1>
+        <p>Texas Hold'em · probabilidades explicadas</p>
+      </div>
+    </div>
+    <span id="phasePill" class="phase-pill">Escolhe a tua mão</span>
+  </header>
+
+  <main class="layout">
+    <!-- TABLE -->
+    <section class="panel table-panel">
+      <div class="players-row">
+        <div>
+          <div class="label">Jogadores na mesa</div>
+          <div class="hint">incluindo tu</div>
+        </div>
+        <div class="stepper">
+          <button id="playersMinus" aria-label="Menos jogadores">−</button>
+          <output id="playersOut">2</output>
+          <button id="playersPlus" aria-label="Mais jogadores">+</button>
+        </div>
+      </div>
+
+      <div class="felt" id="felt">
+        <div class="seats" id="seats" aria-hidden="true"></div>
+        <div class="board">
+          <div class="street-labels">
+            <span style="grid-column: span 3">Flop</span><span>Turn</span><span>River</span>
+          </div>
+          <div class="slots board-slots">
+            <button class="slot" data-slot="b0"></button>
+            <button class="slot" data-slot="b1"></button>
+            <button class="slot" data-slot="b2"></button>
+            <button class="slot" data-slot="b3"></button>
+            <button class="slot" data-slot="b4"></button>
+          </div>
+        </div>
+        <div class="hero">
+          <div class="slots hero-slots">
+            <button class="slot hero-slot" data-slot="h0"></button>
+            <button class="slot hero-slot" data-slot="h1"></button>
+          </div>
+          <div class="hero-label">A tua mão</div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn ghost" id="randomHand">🎲 Mão aleatória</button>
+        <button class="btn ghost" id="dealNext">➜ Próxima rua</button>
+        <button class="btn ghost danger" id="clearAll">✕ Limpar</button>
+      </div>
+    </section>
+
+    <!-- RESULT -->
+    <section class="panel result-panel" id="resultPanel">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-cards"><span>A</span><span>K</span></div>
+        <h2>Toca nas cartas para começar</h2>
+        <p>Escolhe as tuas 2 cartas e, se já saíram, o flop, turn e river. O cálculo é automático.</p>
+      </div>
+
+      <div class="result" id="result" hidden>
+        <div class="gauge-wrap">
+          <svg class="gauge" viewBox="0 0 200 200" aria-hidden="true">
+            <defs>
+              <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="var(--g1)" />
+                <stop offset="100%" stop-color="var(--g2)" />
+              </linearGradient>
+            </defs>
+            <circle class="gauge-track" cx="100" cy="100" r="84" />
+            <circle class="gauge-bar" id="gaugeBar" cx="100" cy="100" r="84" />
+            <circle class="gauge-fair" id="gaugeFair" cx="100" cy="100" r="84" />
+          </svg>
+          <div class="gauge-center">
+            <div class="gauge-label">Equity</div>
+            <div class="gauge-value"><span id="equityValue">0</span><small>%</small></div>
+            <div class="verdict" id="verdict">—</div>
+          </div>
+        </div>
+
+        <div class="current-hand">
+          <div class="label">A tua mão agora</div>
+          <div class="current-name" id="currentHand">—</div>
+          <div class="hint" id="currentHint"></div>
+        </div>
+
+        <div class="wtl">
+          <div class="wtl-bar">
+            <div class="seg win" id="segWin"></div>
+            <div class="seg tie" id="segTie"></div>
+            <div class="seg lose" id="segLose"></div>
+          </div>
+          <div class="wtl-legend">
+            <span><i class="dot win"></i>Ganhar <b id="pWin">0%</b></span>
+            <span><i class="dot tie"></i>Empatar <b id="pTie">0%</b></span>
+            <span><i class="dot lose"></i>Perder <b id="pLose">0%</b></span>
+          </div>
+        </div>
+
+        <div class="fair" id="fairLine"></div>
+        <div class="progress" id="progress"><div id="progressBar"></div></div>
+      </div>
+    </section>
+
+    <!-- OUTS -->
+    <section class="panel outs-panel" id="outsPanel" hidden>
+      <div class="panel-head">
+        <h2>🎯 Outs</h2>
+        <span class="chip" id="outsCount">0 outs</span>
+      </div>
+      <p class="muted" id="outsIntro"></p>
+      <div class="outs-stats">
+        <div class="stat"><div class="stat-value" id="outsNext">0%</div><div class="stat-label" id="outsNextLabel">na próxima carta</div></div>
+        <div class="stat" id="outsRiverBox"><div class="stat-value" id="outsRiver">0%</div><div class="stat-label">até ao river</div></div>
+        <div class="stat"><div class="stat-value" id="outsRule">0%</div><div class="stat-label" id="outsRuleLabel">regra do 4</div></div>
+      </div>
+      <div id="outsGroups" class="outs-groups"></div>
+    </section>
+
+    <!-- DISTRIBUTION -->
+    <section class="panel dist-panel" id="distPanel" hidden>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="mine" role="tab">A tua mão final</button>
+        <button class="tab" data-tab="beaten" role="tab">O que te vence</button>
+      </div>
+      <p class="muted" id="distIntro"></p>
+      <div class="dist" id="dist"></div>
+    </section>
+
+    <!-- POT ODDS -->
+    <section class="panel pot-panel" id="potPanel">
+      <div class="panel-head"><h2>💰 Pot odds</h2><span class="chip subtle">devo pagar?</span></div>
+      <div class="pot-inputs">
+        <label>Pote atual <span class="hint">(já com a aposta do adversário)</span>
+          <input type="number" id="potSize" min="0" step="any" inputmode="decimal" placeholder="ex: 100" />
+        </label>
+        <label>Quanto tenho de pagar
+          <input type="number" id="callSize" min="0" step="any" inputmode="decimal" placeholder="ex: 25" />
+        </label>
+      </div>
+      <div class="pot-result" id="potResult">
+        <p class="muted">Introduz o pote e o valor a pagar para saberes se a chamada é lucrativa a longo prazo.</p>
+      </div>
+    </section>
+
+    <!-- EXPLANATION -->
+    <section class="panel explain-panel" id="explainPanel" hidden>
+      <div class="panel-head"><h2>🧠 Como calculei</h2></div>
+      <ol class="steps" id="steps"></ol>
+    </section>
+
+    <!-- HAND RANKINGS -->
+    <section class="panel rank-panel">
+      <details>
+        <summary><h2>📚 Ranking das mãos</h2><span class="chip subtle">da melhor para a pior</span></summary>
+        <div class="rankings" id="rankings"></div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="foot">Equity contra mãos aleatórias dos adversários. Usa como guia, não como garantia 😉</footer>
+
+  <!-- CARD PICKER -->
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+    <div class="sheet-grip"></div>
+    <div class="sheet-head">
+      <h3 id="sheetTitle">Escolhe uma carta</h3>
+      <div class="sheet-actions">
+        <button class="btn small ghost danger" id="removeCard" hidden>Remover</button>
+        <button class="btn small" id="closeSheet">Feito</button>
+      </div>
+    </div>
+    <div class="picker" id="picker"></div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

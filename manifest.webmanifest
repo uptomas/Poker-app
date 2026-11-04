@@ -1,0 +1,9 @@
+{
+  "name": "Odds Lab — Calculadora de Poker",
+  "short_name": "Odds Lab",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b1512",
+  "theme_color": "#0b1512",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
