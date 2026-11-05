@@ -1,4 +1,4 @@
-const CACHE = 'oddslab-v3';
+const CACHE = 'oddslab-v4';
 const ASSETS = ['./', 'index.html', 'styles.css', 'engine.js', 'app.js', 'icon-192.png', 'icon-512.png', 'manifest.webmanifest'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => {

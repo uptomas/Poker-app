@@ -16,6 +16,17 @@
     stats: null,
     outs: null,
     tab: 'mine',
+    acts: Array(9).fill('in'), // per opponent seat: 'in' | 'bet' | 'fold'
+    bluff: 0.3,
+    potMode: 'call',
+    baseline: null, // equity info for comparison (everyone in / random hands)
+  };
+  const ACT_NEXT = { in: 'bet', bet: 'fold', fold: 'in' };
+  const ACT_LABEL = { in: 'em jogo', bet: 'apostou', fold: 'fold' };
+  const countActs = () => {
+    const acts = state.acts.slice(0, state.players - 1);
+    return { total: acts.length, fold: acts.filter((x) => x === 'fold').length, bet: acts.filter((x) => x === 'bet').length,
+      active: acts.filter((x) => x !== 'fold').length };
   };
 
   // ---------- persistence (per-viewer convenience only) ----------
@@ -25,11 +36,18 @@
       if (saved.players >= 2 && saved.players <= 10) state.players = saved.players;
       if (saved.pot != null) $('potSize').value = saved.pot;
       if (saved.call != null) $('callSize').value = saved.call;
+      if (saved.bluff != null) state.bluff = saved.bluff;
+      if (saved.bluffPot != null) $('bluffPot').value = saved.bluffPot;
+      if (saved.bluffBet != null) $('bluffBet').value = saved.bluffBet;
+      if (saved.fold != null) $('foldRange').value = saved.fold;
     } catch (e) { /* ignore */ }
   }
   function save() {
     try {
-      localStorage.setItem('oddslab', JSON.stringify({ players: state.players, pot: $('potSize').value, call: $('callSize').value }));
+      localStorage.setItem('oddslab', JSON.stringify({
+        players: state.players, pot: $('potSize').value, call: $('callSize').value, bluff: state.bluff,
+        bluffPot: $('bluffPot').value, bluffBet: $('bluffBet').value, fold: $('foldRange').value,
+      }));
     } catch (e) { /* ignore */ }
   }
 
@@ -88,11 +106,15 @@
     const existing = [...wrap.children].filter((s) => !s.classList.contains('leaving'));
     existing.forEach((el, i) => { if (i >= n) { el.classList.add('leaving'); setTimeout(() => el.remove(), 260); } });
     for (let i = existing.length; i < n; i++) {
-      const el = document.createElement('div');
+      const el = document.createElement('button');
       el.className = 'seat';
+      el.dataset.i = i;
       el.innerHTML = `<div class="backs"><div class="back"></div><div class="back"></div></div><div class="who">J${i + 2}</div>`;
+      el.addEventListener('click', () => cycleSeat(i));
       wrap.appendChild(el);
     }
+    for (let i = n; i < 9; i++) state.acts[i] = 'in';
+    renderSeatActs();
     [...wrap.children].filter((s) => !s.classList.contains('leaving')).forEach((el, i) => {
       // Opponents sit along the top rail, in a gentle arc above the board.
       const t = n === 1 ? 0.5 : i / (n - 1);
@@ -105,6 +127,42 @@
     out.classList.remove('flash'); void out.offsetWidth; out.classList.add('flash');
     $('playersMinus').disabled = state.players <= 2;
     $('playersPlus').disabled = state.players >= 10;
+  }
+
+  function renderSeatActs() {
+    [...$('seats').children].filter((s) => !s.classList.contains('leaving')).forEach((el, i) => {
+      const act = state.acts[i];
+      el.classList.toggle('bet', act === 'bet');
+      el.classList.toggle('fold', act === 'fold');
+      let badge = el.querySelector('.badge');
+      if (act === 'in') { if (badge) badge.remove(); }
+      else {
+        if (!badge) { badge = document.createElement('span'); badge.className = 'badge'; el.appendChild(badge); }
+        const text = act === 'bet' ? 'APOSTOU' : 'FOLD';
+        if (badge.textContent !== text) { badge.textContent = text; badge.style.animation = 'none'; void badge.offsetWidth; badge.style.animation = ''; }
+      }
+      el.setAttribute('aria-label', `Jogador ${i + 2}: ${ACT_LABEL[act]}. Toca para mudar.`);
+    });
+    const c = countActs();
+    const box = $('actionBox');
+    box.hidden = !(c.fold || c.bet);
+    $('bluffBox').hidden = !c.bet;
+    if (c.fold || c.bet) {
+      const parts = [];
+      parts.push(`<span class="tag in">${c.active} em jogo</span>`);
+      if (c.bet) parts.push(`<span class="tag bet">${c.bet} ${c.bet === 1 ? 'apostou' : 'apostaram'}</span>`);
+      if (c.fold) parts.push(`<span class="tag fold">${c.fold} fold</span>`);
+      $('actionSummary').innerHTML = parts.join(' ') + (c.active === 0 ? '<div class="hint" style="margin-top:6px">Ganhaste o pote sem showdown.</div>' :
+        `<div class="hint" style="margin-top:6px">A calcular contra ${c.active} ${c.active === 1 ? 'adversário' : 'adversários'}${c.bet ? `, ${c.bet} com mão forte ou bluff` : ''}.</div>`);
+    }
+    $('bluffOut').textContent = Math.round(state.bluff * 100) + '%';
+    $('bluffRange').value = Math.round(state.bluff * 100);
+  }
+
+  function cycleSeat(i) {
+    state.acts[i] = ACT_NEXT[state.acts[i]];
+    renderSeatActs();
+    scheduleCalc();
   }
 
   // ---------- picker ----------
@@ -192,6 +250,8 @@
   }
   function randomHand() {
     Object.keys(state.slots).forEach((k) => (state.slots[k] = null));
+    state.acts.fill('in');
+    renderSeatActs();
     const [a, b] = randomFromDeck(2);
     state.slots.h0 = a; state.slots.h1 = b;
     renderSlots(); scheduleCalc();
@@ -210,6 +270,8 @@
   }
   function clearAll() {
     Object.keys(state.slots).forEach((k) => (state.slots[k] = null));
+    state.acts.fill('in');
+    renderSeatActs();
     renderSlots(); scheduleCalc();
   }
 
@@ -223,9 +285,18 @@
   function calc() {
     if (state.job) state.job.cancelled = true;
     const h = hero(), b = board();
+    const acts = countActs();
+    $('allFolded').hidden = true;
     if (h.length < 2) {
       state.stats = null; state.outs = null;
       $('emptyState').hidden = false; $('result').hidden = true;
+      ['outsPanel', 'distPanel', 'explainPanel'].forEach((id) => ($(id).hidden = true));
+      renderPot();
+      return;
+    }
+    if (acts.active === 0) {
+      state.stats = null; state.outs = null;
+      $('emptyState').hidden = true; $('result').hidden = true; $('allFolded').hidden = false;
       ['outsPanel', 'distPanel', 'explainPanel'].forEach((id) => ($(id).hidden = true));
       renderPot();
       return;
@@ -235,8 +306,10 @@
     state.outs = P.computeOuts(h, b);
     renderOuts();
 
-    const job = P.createEquityJob(h, b, state.players - 1);
+    // Bettors are the first opponents passed to the engine: their hands come from a range.
+    const job = P.createEquityJob(h, b, acts.active, { bettors: acts.bet, bluff: state.bluff });
     state.job = job;
+    state.baseline = null;
     $('progress').classList.remove('done');
     const loop = () => {
       if (job.cancelled) return;
@@ -247,10 +320,24 @@
       $('progressBar').style.width = Math.min(100, (job.stats.trials / job.stats.planned) * 100) + '%';
       if (job.done) {
         $('progress').classList.add('done');
+        if (acts.fold || acts.bet) state.baseline = computeBaseline(h, b, acts);
         renderDist(); renderExplain(); renderPot();
       } else requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  // Quick comparison runs: everyone still in with random hands, and the active players with random hands.
+  function computeBaseline(h, b, acts) {
+    const quick = (opp) => {
+      const j = P.createEquityJob(h, b, opp, { forceMC: true, trials: 20000 });
+      while (!j.done) j.step(20000);
+      return j.stats.equity / j.stats.trials;
+    };
+    return {
+      all: acts.fold ? quick(acts.total) : null,
+      randomActive: acts.bet ? quick(acts.active) : null,
+    };
   }
 
   function renderCurrentHand(h, b) {
@@ -304,9 +391,10 @@
     const win = s.wins / s.trials, tie = s.ties / s.trials, lose = s.losses / s.trials;
     animateNumber($('equityValue'), eq * 100);
     $('gaugeBar').style.strokeDashoffset = CIRC * (1 - eq);
-    const fair = 1 / state.players;
+    const inHand = countActs().active + 1;
+    const fair = 1 / inHand;
     $('gaugeFair').style.strokeDashoffset = -CIRC * fair + 1;
-    const [vText, vClass] = verdictFor(eq, state.players);
+    const [vText, vClass] = verdictFor(eq, inHand);
     const v = $('verdict');
     v.textContent = vText; v.className = 'verdict v' + vClass;
     $('segWin').style.width = win * 100 + '%';
@@ -314,7 +402,7 @@
     $('segLose').style.width = lose * 100 + '%';
     $('pWin').textContent = fmtPct(win); $('pTie').textContent = fmtPct(tie); $('pLose').textContent = fmtPct(lose);
     const ratio = eq / fair;
-    $('fairLine').innerHTML = `Com ${state.players} jogadores, a tua “parte justa” seria <b>${fmtPct(fair)}</b> (marca branca no círculo). ` +
+    $('fairLine').innerHTML = `Com ${inHand} jogadores na mão, a tua “parte justa” seria <b>${fmtPct(fair)}</b> (marca branca no círculo). ` +
       (ratio >= 1 ? `Estás <b>${ratio.toLocaleString('pt-PT', { maximumFractionDigits: 1 })}×</b> acima disso.` : `Estás abaixo: <b>${ratio.toLocaleString('pt-PT', { maximumFractionDigits: 2 })}×</b>.`);
   }
 
@@ -382,7 +470,8 @@
     const s = state.stats;
     if (!s) return;
     $('explainPanel').hidden = false;
-    const h = hero(), b = board(), opp = state.players - 1;
+    const h = hero(), b = board();
+    const acts = countActs(), opp = acts.active;
     const known = h.length + b.length, unknown = 52 - known, missing = 5 - b.length;
     const eq = s.equity / s.trials;
     const steps = [];
@@ -390,7 +479,30 @@
     steps.push(`<strong>O que já se sabe</strong>
       Vês ${known} cartas: as tuas (${h.map(textCard).join(' ')})${b.length ? ` e a mesa (${b.map(textCard).join(' ')})` : ''}.
       Restam <b>${unknown}</b> cartas desconhecidas no baralho. Faltam sair <b>${missing}</b> ${missing === 1 ? 'carta' : 'cartas'} na mesa
-      e cada um dos <b>${opp}</b> ${opp === 1 ? 'adversário tem' : 'adversários tem'} 2 cartas escondidas.`);
+      e cada um dos <b>${opp}</b> ${opp === 1 ? 'adversário ainda em jogo tem' : 'adversários ainda em jogo tem'} 2 cartas escondidas.`);
+
+    const base = state.baseline;
+    if (acts.fold) {
+      steps.push(`<strong>Quem desistiu já não conta</strong>
+        Estavam ${acts.total} adversários e <b>${acts.fold}</b> ${acts.fold === 1 ? 'fez' : 'fizeram'} fold, por isso calculo só contra <b>${opp}</b>.
+        Quem desiste não pode ganhar o pote, e cada adversário a menos é uma mão a menos que te pode bater.
+        ${base && base.all != null ? `<span class="formula">Com todos em jogo: ${fmtPct(base.all)} → com ${opp} ${opp === 1 ? 'adversário' : 'adversários'}: ${fmtPct(eq)}</span>` : ''}
+        As cartas de quem desistiu ficam fora do jogo, mas ninguém as viu, por isso não mudam as contas.`);
+    }
+    if (acts.bet && s.range) {
+      const strongPct = s.range.strong / s.range.total;
+      const desc = b.length < 3
+        ? 'as ~18% melhores mãos iniciais (pares médios e altos, ases fortes, figuras do mesmo naipe…)'
+        : 'top pair ou melhor (usando pelo menos uma carta da mão) ou um projeto forte de cor ou sequência';
+      steps.push(`<strong>Quem apostou: mão forte ou bluff?</strong>
+        ${acts.bet === 1 ? 'Um adversário apostou' : `${acts.bet} adversários apostaram`}. Quem aposta normalmente tem uma mão forte, mas às vezes está a fazer bluff.
+        Das ${fmtNum(s.range.total)} mãos possíveis, <b>${fmtNum(s.range.strong)}</b> (${fmtPct(strongPct)}) contam como “fortes”: ${desc}.
+        <span class="formula">Em cada cenário: ${fmtPct(1 - s.bluff, 0)} das vezes recebe uma mão forte · ${fmtPct(s.bluff, 0)} das vezes uma mão fraca (bluff)</span>
+        ${base && base.randomActive != null ? `<span class="formula">Contra mãos aleatórias: ${fmtPct(base.randomActive)} → contando com a aposta: ${fmtPct(eq)}</span>` : ''}
+        ${base && base.randomActive != null && eq < base.randomActive - 0.02 ? 'A aposta dele baixa as tuas hipóteses: as mãos que apostam são mais fortes do que a média.' : ''}
+        ${base && base.randomActive != null && eq > base.randomActive + 0.02 ? 'Com esta taxa de bluff, a tua mão até ganha valor: bates muitos dos bluffs.' : ''}
+        Muda a percentagem de bluff no slider da mesa para veres o efeito.`);
+    }
 
     if (s.exact) {
       const boards = P.combos(unknown, missing), hands = P.combos(unknown - missing, 2);
@@ -420,9 +532,9 @@
       Em odds: ${oddsAgainst(eq)} contra ti. Se jogasses esta situação 100 vezes, ganharias cerca de ${Math.round(eq * 100)} potes.`);
 
     steps.push(`<strong>Comparar com a parte justa</strong>
-      Com ${state.players} jogadores, se todos fossem iguais cada um teria 1/${state.players} = ${fmtPct(1 / state.players)}.
-      A tua equity é <b>${(eq * state.players).toLocaleString('pt-PT', { maximumFractionDigits: 2 })}×</b> isso.
-      ${state.players > 2 ? 'Repara: quanto mais jogadores, mais difícil é ganhar — até as melhores mãos perdem força.' : ''}`);
+      Com ${opp + 1} jogadores na mão, se todos fossem iguais cada um teria 1/${opp + 1} = ${fmtPct(1 / (opp + 1))}.
+      A tua equity é <b>${(eq * (opp + 1)).toLocaleString('pt-PT', { maximumFractionDigits: 2 })}×</b> isso.
+      ${opp + 1 > 2 ? 'Repara: quanto mais jogadores, mais difícil é ganhar — até as melhores mãos perdem força.' : ''}`);
 
     const o = state.outs;
     if (o && o.outs.length) {
@@ -437,13 +549,14 @@
     }
 
     steps.push(`<strong>Limitação</strong>
-      Os adversários são tratados como tendo mãos aleatórias. Na prática, quem aposta forte costuma ter mãos melhores que a média — ajusta para baixo quando há muita ação.`);
+      ${acts.bet ? 'A definição de “mão forte” é uma aproximação: cada jogador é diferente. Jogadores cautelosos fazem menos bluff (usa 10–20%); jogadores agressivos fazem mais (40%+).' : 'Os adversários que não marcaste são tratados como tendo mãos aleatórias. Se alguém apostar, marca-o na mesa: quem aposta costuma ter mãos melhores do que a média.'}`);
 
     $('steps').innerHTML = steps.map((t, i) => `<li style="animation-delay:${i * 70}ms">${t}</li>`).join('');
   }
 
   function renderPot() {
     save();
+    renderBluff();
     const pot = parseFloat($('potSize').value), call = parseFloat($('callSize').value);
     const el = $('potResult');
     if (!(pot > 0) || !(call > 0)) {
@@ -465,11 +578,45 @@
         <div class="big">${good ? '✅ Pagar é lucrativo' : '❌ Desistir é melhor'}</div>
         <div class="hint">EV da chamada: <b>${ev >= 0 ? '+' : ''}${ev.toLocaleString('pt-PT', { maximumFractionDigits: 2 })}</b> por mão, em média</div>
       </div>
-      <div class="pot-compare"><div class="eq" style="width:${eq * 100}%"></div><div class="need" style="left:${need * 100}%" data-label="precisas ${fmtPct(need, 0)}"></div></div>
+      <div class="pot-compare"><div class="eq" style="width:${eq * 100}%"></div><div class="need" style="left:${need * 100}%;--lx:${need < 0.12 ? '-10%' : need > 0.88 ? '-90%' : '-50%'}" data-label="precisas ${fmtPct(need, 0)}"></div></div>
       <div class="pot-lines">
         Equity necessária = pagar ÷ (pote + pagar) = ${call} ÷ ${pot + call} = <b>${fmtPct(need)}</b><br>
         A tua equity = <b>${fmtPct(eq)}</b> ${good ? '≥' : '<'} ${fmtPct(need)}<br>
-        EV = equity × (pote + pagar) − pagar = ${fmtPct(eq)} × ${pot + call} − ${call} = <b>${ev.toLocaleString('pt-PT', { maximumFractionDigits: 2 })}</b>
+        EV = equity × (pote + pagar) − pagar = ${fmtPct(eq)} × ${pot + call} − ${call} = <b>${ev.toLocaleString('pt-PT', { maximumFractionDigits: 2 })}</b><br>
+        Se a tua mão só ganha quando ele está a fazer bluff, ele tem de fazer bluff em pelo menos <b>${fmtPct(need)}</b> das vezes para pagar compensar.
+      </div>`;
+  }
+
+  // Bluff calculator: how often must they fold for my bet to be profitable?
+  function renderBluff() {
+    const pot = parseFloat($('bluffPot').value), bet = parseFloat($('bluffBet').value);
+    const F = Number($('foldRange').value) / 100;
+    $('foldOut').textContent = Math.round(F * 100) + '%';
+    const el = $('bluffResult');
+    if (!(pot > 0) || !(bet > 0)) {
+      el.innerHTML = '<p class="muted">Introduz o pote e quanto queres apostar para saberes quantas vezes os adversários têm de desistir para o bluff compensar.</p>';
+      return;
+    }
+    const needPure = bet / (pot + bet);
+    const s = state.stats;
+    const live = s && s.trials && board().length < 5;
+    const eq = s && s.trials ? s.equity / s.trials : 0;
+    // If called, you still win `eq` of the pot (semi-bluff): pot + your bet + their call.
+    const ifCalled = live ? eq * (pot + 2 * bet) - bet : -bet;
+    const ev = F * pot + (1 - F) * ifCalled;
+    const need = ifCalled >= 0 ? 0 : -ifCalled / (pot - ifCalled);
+    const good = ev > 0;
+    const n2 = (x) => x.toLocaleString('pt-PT', { maximumFractionDigits: 2 });
+    el.innerHTML = `
+      <div class="verdict-box ${good ? 'good' : 'bad'}">
+        <div class="big">${good ? '✅ O bluff compensa' : '❌ O bluff perde dinheiro'}</div>
+        <div class="hint">EV da aposta: <b>${ev >= 0 ? '+' : ''}${n2(ev)}</b> por mão, em média, se desistirem ${fmtPct(F, 0)} das vezes</div>
+      </div>
+      <div class="pot-compare"><div class="eq" style="width:${F * 100}%"></div><div class="need" style="left:${need * 100}%;--lx:${need < 0.12 ? '-10%' : need > 0.88 ? '-90%' : '-50%'}" data-label="precisas ${fmtPct(need, 0)}"></div></div>
+      <div class="pot-lines">
+        Bluff puro (se pagarem, perdes): têm de desistir em pelo menos aposta ÷ (pote + aposta) = ${bet} ÷ ${pot + bet} = <b>${fmtPct(needPure)}</b> das vezes.<br>
+        ${live ? `Semi-bluff: mesmo que paguem, ainda ganhas ${fmtPct(eq)} das vezes, por isso só precisas que desistam <b>${fmtPct(need)}</b> das vezes. (Conta com cuidado: quem paga costuma ter uma mão melhor do que a média, por isso na prática precisas de um pouco mais.)<br>` : board().length === 5 && s ? 'No river já não há cartas por sair: se pagarem, só ganhas se a tua mão já for a melhor.<br>' : ''}
+        EV = desistem × pote + pagam × (resultado se pagarem) = ${fmtPct(F, 0)} × ${pot} + ${fmtPct(1 - F, 0)} × ${n2(ifCalled)} = <b>${n2(ev)}</b>
       </div>`;
   }
 
@@ -511,8 +658,21 @@
     $('clearAll').addEventListener('click', clearAll);
     $('potSize').addEventListener('input', renderPot);
     $('callSize').addEventListener('input', renderPot);
-    document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
+    document.querySelectorAll('#potTabs .tab').forEach((t) => t.addEventListener('click', () => {
+      document.querySelectorAll('#potTabs .tab').forEach((x) => x.classList.toggle('active', x === t));
+      state.potMode = t.dataset.pot;
+      $('potCall').hidden = state.potMode !== 'call';
+      $('potBluff').hidden = state.potMode !== 'bluff';
+    }));
+    ['bluffPot', 'bluffBet', 'foldRange'].forEach((id) => $(id).addEventListener('input', renderPot));
+    $('bluffRange').addEventListener('input', () => {
+      state.bluff = Number($('bluffRange').value) / 100;
+      $('bluffOut').textContent = Math.round(state.bluff * 100) + '%';
+      save();
+      scheduleCalc();
+    });
+    document.querySelectorAll('#distPanel .tab').forEach((t) => t.addEventListener('click', () => {
+      document.querySelectorAll('#distPanel .tab').forEach((x) => x.classList.toggle('active', x === t));
       state.tab = t.dataset.tab;
       renderDist();
     }));

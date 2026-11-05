@@ -66,6 +66,16 @@
         </div>
       </div>
 
+      <div class="seat-help" id="seatHelp">Toca num adversário para marcar se <span class="tag bet">apostou</span> ou fez <span class="tag fold">fold</span>.</div>
+      <div class="action-box" id="actionBox" hidden>
+        <div class="action-summary" id="actionSummary"></div>
+        <div class="bluff-box" id="bluffBox" hidden>
+          <label for="bluffRange">Quando apostam, estão a fazer bluff <b id="bluffOut">30%</b> das vezes</label>
+          <input type="range" id="bluffRange" min="0" max="100" step="5" value="30" />
+          <div class="range-scale"><span>0% · só apostam com mãos fortes</span><span>100% · apostam com tudo</span></div>
+        </div>
+      </div>
+
       <div class="actions">
         <button class="btn ghost" id="randomHand">🎲 Mão aleatória</button>
         <button class="btn ghost" id="dealNext">➜ Próxima rua</button>
@@ -79,6 +89,12 @@
         <div class="empty-cards"><span>A</span><span>K</span></div>
         <h2>Toca nas cartas para começar</h2>
         <p>Escolhe as tuas 2 cartas e, se já saíram, o flop, turn e river. O cálculo é automático.</p>
+      </div>
+
+      <div class="allin" id="allFolded" hidden>
+        <div class="trophy">🏆</div>
+        <h2>Todos desistiram!</h2>
+        <p>Não há ninguém para te ganhar: o pote é teu (100%).</p>
       </div>
 
       <div class="result" id="result" hidden>
@@ -150,19 +166,36 @@
       <div class="dist" id="dist"></div>
     </section>
 
-    <!-- POT ODDS -->
+    <!-- POT ODDS / BLUFF -->
     <section class="panel pot-panel" id="potPanel">
-      <div class="panel-head"><h2>💰 Pot odds</h2><span class="chip subtle">devo pagar?</span></div>
-      <div class="pot-inputs">
-        <label>Pote atual <span class="hint">(já com a aposta do adversário)</span>
-          <input type="number" id="potSize" min="0" step="any" inputmode="decimal" placeholder="ex: 100" />
-        </label>
-        <label>Quanto tenho de pagar
-          <input type="number" id="callSize" min="0" step="any" inputmode="decimal" placeholder="ex: 25" />
-        </label>
+      <div class="panel-head"><h2>💰 Pagar ou fazer bluff?</h2></div>
+      <div class="tabs" id="potTabs" role="tablist">
+        <button class="tab active" data-pot="call" role="tab">Pagar uma aposta</button>
+        <button class="tab" data-pot="bluff" role="tab">Fazer bluff</button>
       </div>
-      <div class="pot-result" id="potResult">
-        <p class="muted">Introduz o pote e o valor a pagar para saberes se a chamada é lucrativa a longo prazo.</p>
+      <div id="potCall">
+        <div class="pot-inputs">
+          <label>Pote atual <span class="hint">(já com a aposta do adversário)</span>
+            <input type="number" id="potSize" min="0" step="any" inputmode="decimal" placeholder="ex: 100" />
+          </label>
+          <label>Quanto tenho de pagar
+            <input type="number" id="callSize" min="0" step="any" inputmode="decimal" placeholder="ex: 25" />
+          </label>
+        </div>
+        <div class="pot-result" id="potResult"></div>
+      </div>
+      <div id="potBluff" hidden>
+        <div class="pot-inputs">
+          <label>Pote atual <span class="hint">(antes da tua aposta)</span>
+            <input type="number" id="bluffPot" min="0" step="any" inputmode="decimal" placeholder="ex: 100" />
+          </label>
+          <label>Quanto vou apostar
+            <input type="number" id="bluffBet" min="0" step="any" inputmode="decimal" placeholder="ex: 60" />
+          </label>
+        </div>
+        <label class="fold-label" for="foldRange">Achas que desistem <b id="foldOut">50%</b> das vezes</label>
+        <input type="range" id="foldRange" min="0" max="100" step="5" value="50" />
+        <div class="pot-result" id="bluffResult"></div>
       </div>
     </section>
 

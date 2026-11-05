@@ -39,4 +39,12 @@ const o = P.computeOuts(h('Ah Kh'), h('Qh 7h 2c'));
 console.log('outs', o.outs.length, o.groups.map(g => g.cat + ':' + g.cards.map(P.cardLabel).join(',')).join(' | '), (o.byRiver*100).toFixed(1));
 const o2 = P.computeOuts(h('9s 8s'), h('7d 6c 2h'));
 console.log('OESD outs', o2.outs.length, o2.groups.map(g => g.cat + ':' + g.cards.length).join(' '));
+// ranges: a bettor with no bluffs beats an underpair far more often than a random hand
+const rnd = P.runEquity(h('Ts Td'), h('Kc 7d 2s'), 1);
+const vsBet = P.runEquity(h('Ts Td'), h('Kc 7d 2s'), 1, { bettors: 1, bluff: 0 });
+const vsBluff = P.runEquity(h('Ts Td'), h('Kc 7d 2s'), 1, { bettors: 1, bluff: 1 });
+assert(vsBet.equity / vsBet.trials < rnd.equity / rnd.trials - 0.3, 'value range is stronger');
+assert(vsBluff.equity / vsBluff.trials > rnd.equity / rnd.trials, 'bluff range is weaker');
+assert(P.isStrong(h('Ks Qd'), h('Kc 7d 2s')) && !P.isStrong(h('9s 8d'), h('Kc 7d 2s')));
+assert(P.isStrong(h('Ah 5h'), h('Kh 7h 2s')), 'flush draw counts as strong');
 console.log('all tests passed');

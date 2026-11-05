@@ -159,31 +159,107 @@
     else { stats.losses++; stats.beatenBy[best >> 20]++; }
   }
 
-  /** Plans how to compute: exact enumeration if small enough (1 opponent only). */
-  function plan(hero, board, opponents) {
+  /** Plans how to compute: exact enumeration if small enough (1 random opponent only). */
+  function plan(hero, board, opponents, bettors, forceMC) {
     const unknown = 52 - hero.length - board.length;
     const missing = 5 - board.length;
-    if (opponents === 1) {
+    if (opponents === 1 && !bettors && !forceMC) {
       const total = combos(unknown, missing) * combos(unknown - missing, 2);
       if (total <= 1200000) return { method: 'exact', total };
     }
     return { method: 'montecarlo', total: opponents >= 6 ? 80000 : 150000 };
   }
 
+  // ---------- Opponent ranges (for players who bet) ----------
+
+  // Chen formula: a classic quick score for starting hands (higher = stronger).
+  function chen(hole) {
+    const r1 = rankOf(hole[0]), r2 = rankOf(hole[1]);
+    const hi = Math.max(r1, r2), lo = Math.min(r1, r2);
+    const pts = (r) => (r === 12 ? 10 : r === 11 ? 8 : r === 10 ? 7 : r === 9 ? 6 : (r + 2) / 2);
+    let score = pts(hi);
+    if (hi === lo) return Math.max(5, score * 2);
+    if (suitOf(hole[0]) === suitOf(hole[1])) score += 2;
+    const gap = hi - lo - 1;
+    score -= gap === 0 ? 0 : gap === 1 ? 1 : gap === 2 ? 2 : gap === 3 ? 4 : 5;
+    if (gap <= 1 && hi < 10) score += 1;
+    return Math.ceil(score);
+  }
+  const CHEN_STRONG = 7; // roughly the top ~18% of starting hands
+
+  function straightOuts(mask) {
+    let n = 0;
+    if (straightHigh(mask) >= 0) return 0;
+    for (let r = 0; r < 13; r++) if (!(mask & (1 << r)) && straightHigh(mask | (1 << r)) >= 0) n++;
+    return n;
+  }
+
+  /**
+   * Would a player bet this hand on this board for value (or as a strong semi-bluff)?
+   * Pre-flop: Chen score >= 7. Post-flop: top pair or better using a hole card,
+   * or a flush draw / open-ended straight draw while cards are still to come.
+   */
+  function isStrong(hole, board) {
+    if (board.length < 3) return chen(hole) >= CHEN_STRONG;
+    const all = hole.concat(board);
+    const cat = categoryOf(evaluate(all));
+    const boardCat = categoryOf(evaluate(board));
+    if (cat >= 2 && cat > boardCat) return true;
+    if (cat === 1 && boardCat === 0) {
+      let top = 0;
+      for (const c of board) top = Math.max(top, rankOf(c));
+      const r1 = rankOf(hole[0]), r2 = rankOf(hole[1]);
+      const pairRank = r1 === r2 ? r1 : board.some((c) => rankOf(c) === r1) ? r1 : r2;
+      if (pairRank >= top) return true; // top pair or overpair
+    }
+    if (board.length < 5) {
+      const suitCount = [0, 0, 0, 0];
+      for (const c of all) suitCount[suitOf(c)]++;
+      for (const h of hole) if (suitCount[suitOf(h)] === 4) return true; // flush draw
+      let mask = 0, bmask = 0;
+      for (const c of all) mask |= 1 << rankOf(c);
+      for (const c of board) bmask |= 1 << rankOf(c);
+      if (straightOuts(mask) >= 2 && straightOuts(mask) > straightOuts(bmask)) return true; // open-ended
+    }
+    return false;
+  }
+
+  /** Splits every possible opponent hand into "strong" (value bets) and "weak" (bluffs). */
+  function buildRanges(deck, board) {
+    const strong = [], weak = [];
+    for (let a = 0; a < deck.length; a++) {
+      for (let b = a + 1; b < deck.length; b++) {
+        const pair = [deck[a], deck[b]];
+        (isStrong(pair, board) ? strong : weak).push(pair);
+      }
+    }
+    return { strong, weak, total: strong.length + weak.length };
+  }
+
   /**
    * Creates an incremental equity job. Call job.step(n) repeatedly until job.done.
    * Exact enumeration uses a generator; Monte Carlo draws random cards.
+   * opts.bettors: how many of the opponents bet (their hands come from a range);
+   * opts.bluff: how often (0..1) a bettor is bluffing with a weak hand.
    */
-  function createEquityJob(hero, board, opponents) {
-    const p = plan(hero, board, opponents);
+  function createEquityJob(hero, board, opponents, opts) {
+    opts = opts || {};
+    const bettors = Math.min(opts.bettors || 0, opponents);
+    const bluff = opts.bluff == null ? 0.3 : opts.bluff;
+    const p = plan(hero, board, opponents, bettors, opts.forceMC);
+    if (opts.trials) p.total = opts.trials;
     const stats = newStats(opponents);
     stats.exact = p.method === 'exact';
     stats.planned = p.total;
+    stats.bettors = bettors;
+    stats.bluff = bluff;
     const deck = remainingDeck(hero.concat(board));
     const missing = 5 - board.length;
     const heroCards = new Array(7), oppCards = new Array(7), opp = new Array(opponents);
     for (let i = 0; i < board.length; i++) { heroCards[2 + i] = board[i]; oppCards[2 + i] = board[i]; }
     heroCards[0] = hero[0]; heroCards[1] = hero[1];
+    const ranges = bettors ? buildRanges(deck, board) : null;
+    if (ranges) stats.range = { strong: ranges.strong.length, weak: ranges.weak.length, total: ranges.total };
 
     let gen = null;
     if (stats.exact) gen = exactGen();
@@ -216,19 +292,36 @@
       }
     }
 
-    const work = deck.slice();
-    function mcTrial() {
-      const need = missing + 2 * opponents;
-      const len = work.length;
-      for (let i = 0; i < need; i++) {
-        const j = i + Math.floor(Math.random() * (len - i));
-        const t = work[i]; work[i] = work[j]; work[j] = t;
+    const stamp = new Int32Array(52);
+    let trialId = 0;
+    const dealt = new Array(2 * opponents);
+    const len = deck.length;
+    function drawFree() {
+      for (;;) {
+        const c = deck[Math.floor(Math.random() * len)];
+        if (stamp[c] !== trialId) { stamp[c] = trialId; return c; }
       }
-      let k = 0;
-      for (let j = 0; j < missing; j++) { const c = work[k++]; heroCards[2 + board.length + j] = c; oppCards[2 + board.length + j] = c; }
+    }
+    function mcTrial() {
+      trialId++;
+      // 1) Bettors get a hand from their range: a bluff (weak) or a value hand (strong).
+      for (let o = 0; o < bettors; o++) {
+        let list = Math.random() < bluff ? ranges.weak : ranges.strong;
+        if (!list.length) list = list === ranges.weak ? ranges.strong : ranges.weak;
+        let pair;
+        for (let tries = 0; tries < 60; tries++) {
+          const cand = list[Math.floor(Math.random() * list.length)];
+          if (stamp[cand[0]] !== trialId && stamp[cand[1]] !== trialId) { pair = cand; break; }
+        }
+        if (pair) { stamp[pair[0]] = trialId; stamp[pair[1]] = trialId; dealt[2 * o] = pair[0]; dealt[2 * o + 1] = pair[1]; }
+        else { dealt[2 * o] = drawFree(); dealt[2 * o + 1] = drawFree(); }
+      }
+      // 2) Everyone else gets random cards, then the board is completed.
+      for (let o = bettors; o < opponents; o++) { dealt[2 * o] = drawFree(); dealt[2 * o + 1] = drawFree(); }
+      for (let j = 0; j < missing; j++) { const c = drawFree(); heroCards[2 + board.length + j] = c; oppCards[2 + board.length + j] = c; }
       const hs = evaluate(heroCards, 7);
       for (let o = 0; o < opponents; o++) {
-        oppCards[0] = work[k++]; oppCards[1] = work[k++];
+        oppCards[0] = dealt[2 * o]; oppCards[1] = dealt[2 * o + 1];
         opp[o] = evaluate(oppCards, 7);
       }
       record(stats, hs, opp, opponents);
@@ -251,8 +344,8 @@
     return job;
   }
 
-  function runEquity(hero, board, opponents) {
-    const job = createEquityJob(hero, board, opponents);
+  function runEquity(hero, board, opponents, opts) {
+    const job = createEquityJob(hero, board, opponents, opts);
     while (!job.done) job.step(50000);
     return job.stats;
   }
@@ -303,7 +396,7 @@
   const api = {
     RANKS, SUITS, SUIT_SYMBOL, CATEGORIES, RANK_NAME_PT,
     card, rankOf, suitOf, cardLabel, parseCard, evaluate, categoryOf, describe,
-    combos, remainingDeck, plan, createEquityJob, runEquity, computeOuts, preflopInfo,
+    combos, remainingDeck, plan, createEquityJob, chen, isStrong, buildRanges, runEquity, computeOuts, preflopInfo,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Poker = api;
